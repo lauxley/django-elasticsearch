@@ -104,16 +104,14 @@ class EsIndexableTestCase(TestCase):
     def test_custom_mapping(self):
         # should take the defaults into accounts
         expected = {
-            TestModel.Elasticsearch.doc_type: {
-                'properties': {
-                    'username': {
-                        'analyzer': 'test_analyzer',
-                        'boost': 20,
-                        'type': 'string'
-                    },
-                    'username_complete': {
-                        'type': 'completion'
-                    }
+            'properties': {
+                'username': {
+                    'analyzer': 'test_analyzer',
+                    'boost': 20,
+                    'type': 'string'
+                },
+                'username_complete': {
+                    'type': 'completion'
                 }
             }
         }
@@ -148,18 +146,12 @@ class EsIndexableTestCase(TestCase):
         # it doesn't crash and deserialize well.
         settings = TestModel.es.get_settings()
         self.assertEqual(dict, type(settings))
-
-    def test_custom_index(self):
-        es_client.indices.exists(TestModel.Elasticsearch.index)
-
-    def test_custom_doc_type(self):
-        es_client.indices.exists_type('django-test', 'test-doc-type')
-
+    
     def test_reevaluate(self):
         # test that the request is resent if something changed filters, ordering, ndx
         TestModel.es.flush()
         TestModel.es.do_update()
-
+    
         q = TestModel.es.search('woot')
         self.assertTrue(self.instance in q.deserialize())  # evaluate
         q = q.filter(last_name='grut')
@@ -236,3 +228,8 @@ class EsAutoIndexTestCase(TestCase):
         TestModel.es.do_update()
         self.assertEqual(TestModel.es.filter(first_name=u'Test').count(), 0)
         self.assertEqual(TestModel.es.filter(first_name=u'Test').count(), 0)
+
+
+class EsMultiIndexTestCase(TestCase):
+    def test_do_index(self):
+        raise NotImplementedError("TODO")

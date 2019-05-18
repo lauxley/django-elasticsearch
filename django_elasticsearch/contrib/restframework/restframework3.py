@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.serializers import OrderedDict
 from rest_framework.settings import api_settings
 from rest_framework.filters import OrderingFilter
-from rest_framework.filters import DjangoFilterBackend
+from django_filters.rest_framework import DjangoFilterBackend
 
 from django_elasticsearch.models import EsIndexable
 
@@ -87,7 +87,7 @@ class IndexableModelMixin(object):
     def dispatch(self, request, *args, **kwargs):
         try:
             r = super(IndexableModelMixin, self).dispatch(request, *args, **kwargs)
-        except (ConnectionError, TransportError), e:
+        except (ConnectionError, TransportError) as e:
             # reset object list
             self.queryset = None
             self.es_failed = True

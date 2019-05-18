@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime
 
 from django.conf import settings
 from django.db.models import Model
@@ -19,7 +20,6 @@ class EsQueryset(QuerySet):
     def __init__(self, model, fuzziness=None):
         self.model = model
         self.index = model.es.index
-        self.doc_type = model.es.doc_type
 
         # config
         self.mode = self.MODE_SEARCH
@@ -72,38 +72,34 @@ class EsQueryset(QuerySet):
         for r in self._result_cache:
             yield r
 
-    def __repr__(self):
+    def __str__(self):
         data = list(self[:REPR_OUTPUT_SIZE + 1])
         if len(data) > REPR_OUTPUT_SIZE:
             data[-1] = "...(remaining elements truncated)..."
-        return repr(data)
+        return str(data)
 
     def __getitem__(self, ndx):
-        if ndx != self.ndx:
-            self._result_cache = []
-
-        if self.is_evaluated:
-            return self._result_cache
-
-        self.ndx = ndx
-
+        self._result_cache = []
+        
         if type(ndx) is slice:
             self._start = ndx.start or 0  # in case it is None because [:X]
             self._stop = ndx.stop
         elif type(ndx) is int:
             self._start = ndx
             self._stop = ndx + 1
-
+        
         self.do_search()
+        
         if type(ndx) is slice:
             return self._result_cache
         elif type(ndx) is int:
             # Note: 0 because we only fetch the right one
             return self._result_cache[0]
 
-    def __contains__(self, val):
+    def __contains__(self, instance):
         self.do_search()
-        return val in self._result_cache
+        return instance.id in [e.id if self._deserialize else e["id"]
+                               for e in self._result_cache]
 
     def __and__(self, other):
         raise NotImplementedError
@@ -127,73 +123,74 @@ class EsQueryset(QuerySet):
             fuzziness = getattr(settings, 'ELASTICSEARCH_FUZZINESS', 0.5)
         else:
             fuzziness = self.fuzziness
-
+        
         if self._query:
-            search['query'] = {
-                'match': {
-                    '_all': {
-                        'query': self._query,
-                        'fuzziness': fuzziness
-                    }
-                },
-            }
-
+            search = {'must': [{'multi_match': {
+                'query': self._query,
+                'fields': self.model.es.get_search_fields(),
+                'fuzziness': fuzziness
+            }}]}
+        else:
+            if not self.filters:
+                search = {"must": [{"match_all": {}}]}
+        
         if self.filters:
-            # TODO: should we add _cache = true ?!
-            search['filter'] = {}
-            mapping = self.model.es.get_mapping()
-
             for field, value in self.filters.items():
                 try:
-                    value = value.lower()
+                    value = value  #.lower()
                 except AttributeError:
                     pass
 
                 field, operator = self.sanitize_lookup(field)
+                field_ = field.split('.')[0]
+                mapping = self.model.es.mapping['properties']
+                is_nested = field_ in mapping and mapping[field_]['type'] in ['nested']
 
-                try:
-                    is_nested = 'properties' in mapping[field]
-                except KeyError:
-                    # abstract
-                    is_nested = False
-
-                field_name = is_nested and field + ".id" or field
                 if is_nested and isinstance(value, Model):
+                    field_name = field + ".id"
                     value = value.id
-
+                else:
+                    field_name = field
+                
+                if isinstance(value, datetime):
+                    value = value.isoformat()
+                
                 if operator == 'exact':
-                    filtr = {'bool': {'must': [{'term': {field_name: value}}]}}
-
+                    filtr = {'must': [{'term': {field_name: value}}]}
+                
                 elif operator == 'not':
-                    filtr = {'bool': {'must_not': [{'term': {field_name: value}}]}}
-
+                    filtr = {'must_not': [{'term': {field_name: value}}]}
+                
                 elif operator == 'should':
-                    filtr = {'bool': {operator: [{'term': {field_name: value}}]}}
-
+                    filtr = {'should': [{'term': {field_name: value}}]}
+                
+                elif operator == 'should_not':
+                    filtr = {'should': [{'term': {field_name: value}}]}
+                
                 elif operator == 'contains':
-                    filtr = {'query': {'match': {field_name: {'query': value}}}}
+                    filtr = {'must': [{'match': {field_name: value}}]}
 
                 elif operator in ['gt', 'gte', 'lt', 'lte']:
-                    filtr = {'bool': {'must': [{'range': {field_name: {
-                        operator: value}}}]}}
+                    filtr = {'must': [{'range': {field_name: {
+                        operator: value}}}]}
 
                 elif operator == 'range':
-                    filtr = {'bool': {'must': [{'range': {field_name: {
+                    filtr = {'must': [{'range': {field_name: {
                         'gte': value[0],
-                        'lte': value[1]}}}]}}
+                        'lte': value[1]}}}]}
 
                 elif operator == 'isnull':
                     if value:
-                        filtr = {'missing': {'field': field_name}}
+                        filtr = {'filter': {'missing': {'field': field_name}}}
                     else:
-                        filtr = {'exists': {'field': field_name}}
+                        filtr = {'filter': {'exists': {'field': field_name}}}
 
-                nested_update(search['filter'], filtr)
-
-            body['query'] = {'filtered': search}
-        else:
-            body = search
-
+                if is_nested:
+                    filtr = {'must': [{'nested': {'path': field.split('.')[0],
+                                                  'query': {'bool': filtr}}}]}
+                nested_update(search, filtr)
+        
+        body = {"query": {"bool": search}}
         return body
 
     @property
@@ -211,19 +208,17 @@ class EsQueryset(QuerySet):
     def do_search(self):
         if self.is_evaluated:
             return
-
+        
         body = self.make_search_body()
         if self.facets_fields:
-            aggs = dict([
-                (field, {'terms':
-                        {'field': field}})
-                for field in self.facets_fields
-            ])
+            aggs = {}
+
+            for field in self.facets_fields:
+                aggs[field] = {'terms': {'field': field}}
+                # if self.global_facets:
+                #     aggs[field]['filter'] = body['query']['filtered']
             if self.facets_limit:
                 aggs[field]['terms']['size'] = self.facets_limit
-
-            if self.global_facets:
-                aggs = {'global_count': {'global': {}, 'aggs': aggs}}
 
             body['aggs'] = aggs
 
@@ -241,8 +236,7 @@ class EsQueryset(QuerySet):
                             for f in self.ordering] + ["_score"]
 
         search_params = {
-            'index': self.index,
-            'doc_type': self.doc_type
+            'index': self.index
         }
         if self._start:
             search_params['from'] = self._start
@@ -266,15 +260,14 @@ class EsQueryset(QuerySet):
         else:
             if 'from' in search_params:
                 search_params['from_'] = search_params.pop('from')
-
             r = es_client.search(**search_params)
 
         self._response = r
         if self.facets_fields:
-            if self.global_facets:
-                self._facets = r['aggregations']['global_count']
-            else:
-                self._facets = r['aggregations']
+            # if self.global_facets:
+            #     self._facets = r['aggregations']['global_count']
+            # else:
+            self._facets = r['aggregations']
 
         self._suggestions = r.get('suggest')
         if self._deserialize:
@@ -318,7 +311,8 @@ class EsQueryset(QuerySet):
         return clone
 
     def sanitize_lookup(self, lookup):
-        valid_operators = ['exact', 'not', 'should', 'range', 'gt', 'lt', 'gte', 'lte', 'contains', 'isnull']
+        valid_operators = ['exact', 'not', 'should', 'should_not', 'range',
+                           'gt', 'lt', 'gte', 'lte', 'contains', 'isnull']
         words = lookup.split('__')
         fields = [word for word in words if word not in valid_operators]
         # this is also django's default lookup type
@@ -365,9 +359,7 @@ class EsQueryset(QuerySet):
         if pk is None:
             raise AttributeError("EsQueryset.get needs to get passed a 'pk' or 'id' parameter.")
 
-        r = es_client.get(index=self.index,
-                          doc_type=self.doc_type,
-                          id=pk)
+        r = es_client.get(index=self.index, id=pk)
         self._response = r
 
         if self._deserialize:
@@ -419,10 +411,10 @@ class EsQueryset(QuerySet):
             # Note: there is no count on the mlt api, need to fetch the results
             self.do_search()
         else:
+            body = self.make_search_body() or None
             r = es_client.count(
                 index=self.index,
-                doc_type=self.doc_type,
-                body=self.make_search_body() or None)
+                body=body)
             self._total = r['count']
         return self._total
 

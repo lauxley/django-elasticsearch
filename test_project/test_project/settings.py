@@ -9,7 +9,7 @@ ELASTICSEARCH_AUTO_INDEX = False
 ELASTICSEARCH_SETTINGS = {
     # better tests performance
     "number_of_shards": 1,
-    "index.store.type": "memory"
+    # "index.store.type": "memory"
 }
 
 
@@ -19,7 +19,7 @@ class DisableMigrations(object):
         return True
 
     def __getitem__(self, item):
-        return "notmigrations"
+        return None
 
 MIGRATION_MODULES = DisableMigrations()
 

@@ -3,7 +3,12 @@ django_elasticsearch is a wrapper around py-elasticsearch that automates the ind
 
 INSTALL
 =======
-* [Install and launch elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup.html) if it's not done already.
+* [Install and launch elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup.html) if it's not done already.  
+Through [docker](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html):
+```shell
+docker pull docker.elastic.co/elasticsearch/elasticsearch:7.0.1
+docker run -d -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:7.0.1
+```
 
 * Install [py-elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/client/python-api/current/)
     ```shell
@@ -21,7 +26,6 @@ ELASTICSEARCH VERSION COMPATIBILITY
 ===================================
 
 As stated in the python elasticsearch module documentation:
-
 
 >There are two branches for development - master and 0.4. Master branch is used to track all the changes for Elasticsearch 1.0 and beyond whereas 0.4 tracks Elasticsearch 0.90.
 >
@@ -446,4 +450,5 @@ coverage run --source=django_elasticsearch --omit='*tests*','*migrations*' manag
 NOTES
 =====
 
-Why not make a django database backend ? Because django *does not* support non relational databases, which means that the db backend API is very heavily designed around SQL. I'm usually in favor of hiding the complexity, but in this case for every bit that feels right - auto db and test db creation, client handling, .. - there is one that feels wrong and keeping up with the api changes makes it worse. There is an avorted prototype branch (feature/db-backend) going this way though.
+Why not make a django database backend ? Because django *does not* support non relational databases, which means that the db backend API is very heavily designed around SQL. 
+I'm usually in favor of hiding the complexity, but in this case for every bit that feels right - auto db and test db creation, client handling, .. - there is one that feels wrong and keeping up with the api changes makes it worse. There is an avorted prototype branch (feature/db-backend) going this way though.

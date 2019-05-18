@@ -6,36 +6,36 @@ except ImportError:  # python < 2.7
     from django.utils import importlib
 
 from django.conf import settings
-try:
-    from django.utils import importlib
-except:
-    import importlib
 from django.db.models import FieldDoesNotExist
+from django.utils.functional import cached_property
 
 from django_elasticsearch.query import EsQueryset
 from django_elasticsearch.client import es_client
 
 # Note: we use long/double because different db backends
 # could store different sizes of numerics ?
-# Note: everything else is mapped to a string
+# Note: everything else is mapped to a keyword
 ELASTICSEARCH_FIELD_MAP = {
     u'AutoField': 'long',
     u'BigIntegerField': 'long',
     u'BinaryField': 'binary',
     u'BooleanField': 'boolean',
+    u'TextField': 'text',
     # both defaults to 'dateOptionalTime'
     u'DateField': 'date',
     u'DateTimeField': 'date',
     # u'TimeField': 'string',
     u'FloatField': 'double',
     u'IntegerField': 'long',
+    u'DecimalField': 'float',
+    u'DurationField': 'float',
     u'PositiveIntegerField': 'long',
     u'PositiveSmallIntegerField': 'short',
     u'SmallIntegerField': 'short',
 
     u'ForeignKey': 'object',
     u'OneToOneField': 'object',
-    u'ManyToManyField': 'object'
+    u'ManyToManyField': 'nested'
 }
 
 
@@ -63,31 +63,23 @@ class ElasticsearchManager():
         elif issubclass(k, EsIndexable):
             self.instance = None
             self.model = k
-
+    
         self.serializer = None
         self._mapping = None
-
+        
     def get_index(self):
         return self.model.Elasticsearch.index
-
+    
     @property
     def index(self):
         return self.get_index()
-
-    def get_doc_type(self):
-        return (self.model.Elasticsearch.doc_type
-                or 'model-{0}'.format(self.model.__name__))
-
-    @property
-    def doc_type(self):
-        return self.get_doc_type()
-
+    
     def check_cluster(self):
         return es_client.ping()
 
     def get_serializer(self, **kwargs):
         serializer = self.model.Elasticsearch.serializer_class
-        if isinstance(serializer, basestring):
+        if isinstance(serializer, str):
             module, kls = self.model.Elasticsearch.serializer_class.rsplit(".", 1)
             mod = importlib.import_module(module)
             return getattr(mod, kls)(self.model, **kwargs)
@@ -123,14 +115,12 @@ class ElasticsearchManager():
     def do_index(self):
         body = self.serialize()
         es_client.index(index=self.index,
-                        doc_type=self.doc_type,
                         id=self.instance.id,
                         body=body)
 
     @needs_instance
     def delete(self):
         es_client.delete(index=self.index,
-                         doc_type=self.doc_type,
                          id=self.instance.id,
                          ignore=404)
 
@@ -156,9 +146,6 @@ class ElasticsearchManager():
 
         See es_client.mlt for all available kwargs
         :arg index: The name of the index * defaults to self.index *
-        :arg doc_type: The type of the document (use `_all` to fetch the first
-                       document matching the ID across all types)
-                       * Defaults to self.doc_type *
         :arg include: Whether to include the queried document from the response
                       * defaults to False *
         :arg mlt_fields: Specific fields to perform the query against
@@ -206,7 +193,7 @@ class ElasticsearchManager():
             suggest_fields = self.model.Elasticsearch.suggest_fields
         if suggest_fields:
             q = q.suggest(fields=suggest_fields, limit=suggest_limit)
-
+        
         return q.query(query)
 
     # Convenience methods
@@ -230,29 +217,33 @@ class ElasticsearchManager():
             raise ValueError("{0} is not in the completion_fields list, "
                              "it is required to have a specific mapping."
                              .format(field_name))
-
+        
         complete_name = "{0}_complete".format(field_name)
         return self.queryset.complete(complete_name, query)
-
+    
     def do_update(self):
         """
         Hit this if you are in a hurry,
         the recently indexed items will be available right away.
         """
         es_client.indices.refresh(index=self.index)
-
+    
     def get_fields(self):
         model_fields = [f.name for f in self.model._meta.fields +
                         self.model._meta.many_to_many]
-
-        return self.model.Elasticsearch.fields or model_fields
-
+        fields = self.model.Elasticsearch.fields or model_fields
+        return [f for f in fields if f not in self.model.Elasticsearch.exclude]
+    
+    def get_search_fields(self):
+        return (self.model.Elasticsearch.search_fields
+                or [f for f,m in self.mapping['properties'].items()
+                    if m['type'] in ['text', 'keyword']])
+    
     def make_mapping(self):
         """
         Create the model's es mapping on the fly
         """
         mappings = {}
-
         for field_name in self.get_fields():
             try:
                 field = self.model._meta.get_field(field_name)
@@ -261,11 +252,11 @@ class ElasticsearchManager():
                 mapping = {}
             else:
                 mapping = {'type': ELASTICSEARCH_FIELD_MAP.get(
-                    field.get_internal_type(), 'string')}
+                    field.get_internal_type(), 'keyword')}
             try:
                 # if an analyzer is set as default, use it.
                 # TODO: could be also tokenizer, filter, char_filter
-                if mapping['type'] == 'string':
+                if mapping['type'] == 'text':
                     analyzer = settings.ELASTICSEARCH_SETTINGS['analysis']['default']
                     mapping['analyzer'] = analyzer
             except (ValueError, AttributeError, KeyError, TypeError):
@@ -281,19 +272,15 @@ class ElasticsearchManager():
         for field_name in fields:
             complete_name = "{0}_complete".format(field_name)
             mappings[complete_name] = {"type": "completion"}
-
         return {
-            self.doc_type: {
-                "properties": mappings
-            }
+            "properties": mappings
         }
 
     def get_mapping(self):
         if self._mapping is None:
-            # TODO: could be done once for every index/doc_type ?
-            full_mapping = es_client.indices.get_mapping(index=self.index,
-                                                         doc_type=self.doc_type)
-            self._mapping = full_mapping[self.index]['mappings'][self.doc_type]['properties']
+            # TODO: could be done once for every index ?
+            full_mapping = es_client.indices.get_mapping(index=self.index)
+            self._mapping = full_mapping[self.index]['mappings']['properties']
 
         return self._mapping
 
@@ -328,17 +315,15 @@ class ElasticsearchManager():
 
         return diff
 
-    def create_index(self, ignore=True):
-        body = {}
+    @property
+    def mapping(self):
+        return self.make_mapping()
+    
+    def create_index(self):
+        body = {'mappings': self.mapping}
         if hasattr(settings, 'ELASTICSEARCH_SETTINGS'):
             body['settings'] = settings.ELASTICSEARCH_SETTINGS
-
-        es_client.indices.create(self.index,
-                                 body=body,
-                                 ignore=ignore and 400)
-        es_client.indices.put_mapping(index=self.index,
-                                      doc_type=self.doc_type,
-                                      body=self.make_mapping())
+        es_client.indices.create(self.index, body=body)
 
     def reindex_all(self, queryset=None):
         q = queryset or self.model.objects.all()
@@ -346,8 +331,6 @@ class ElasticsearchManager():
             instance.es.do_index()
 
     def flush(self):
-        es_client.indices.delete_mapping(index=self.index,
-                                         doc_type=self.doc_type,
-                                         ignore=404)
+        es_client.indices.delete([self.index],
+                                 ignore_unavailable=True)
         self.create_index()
-        self.reindex_all()

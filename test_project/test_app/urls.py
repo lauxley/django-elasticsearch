@@ -1,15 +1,13 @@
-from django.conf.urls import url
-from django.conf.urls import patterns
+from django.urls import path
 
 from test_app.views import TestDetailView
 from test_app.views import TestListView
 
 
-urlpatterns = patterns(
-    '',
-    url(r'^tests/(?P<pk>\d+)/$', TestDetailView.as_view(), name='test_detail'),
-    url(r'^tests/$', TestListView.as_view(), name='test_list'),
-)
+urlpatterns = [
+    path(r'tests/<int:pk>/', TestDetailView.as_view(), name='test_detail'),
+    path(r'tests/', TestListView.as_view(), name='test_list'),
+]
 
 from test_app.views import TestViewSet
 from rest_framework.routers import DefaultRouter

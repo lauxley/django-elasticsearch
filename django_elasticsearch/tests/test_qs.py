@@ -1,6 +1,6 @@
 import time
-import mock
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 from django.test.utils import override_settings
@@ -18,7 +18,7 @@ class EsQuerysetTestCase(TestCase):
     def setUp(self):
         # create a bunch of documents
         TestModel.es.flush()
-
+        
         self.t1 = TestModel.objects.create(username=u"woot woot",
                                            first_name=u"John",
                                            last_name=u"Smith",
@@ -66,45 +66,44 @@ class EsQuerysetTestCase(TestCase):
 
     def test_repr(self):
         contents = str(TestModel.es.queryset.order_by('id').deserialize())
-        expected = str(TestModel.objects.all())
+        expected = str(list(TestModel.objects.all()))
         self.assertEqual(contents, expected)
 
     def test_use_cache(self):
-        # Note: we use _make_search_body because it's only called
-        # if the cache store is not hit
-        fake_body = {'query': {'match': {'_all': 'foo'}}}
-        with mock.patch.object(EsQueryset,
-                               'make_search_body') as mocked:
-            mocked.return_value = fake_body
+        with patch('django_elasticsearch.client.es_client.search', MagicMock(side_effect=es_client.search)) as mocked:
             qs = TestModel.es.search("")
             # eval
             list(qs)
             # use cache
             list(qs)
-
-        self.assertEqual(len(mocked.mock_calls), 1)
-
-        # same for a sliced query
-        with mock.patch.object(EsQueryset,
-                               'make_search_body') as mocked:
-            mocked.return_value = fake_body
+            # use cache also
+            self.t1 in qs
+            
+            self.assertEqual(len(mocked.mock_calls), 1)
+            
             # re-eval
             list(qs[0:5])
-            # use cache
-            list(qs[0:5])
+            self.assertEqual(len(mocked.mock_calls), 2)
 
-        self.assertEqual(len(mocked.mock_calls), 1)
+            # and also
+            qs[0]
+            self.assertEqual(len(mocked.mock_calls), 3)
+            
+            with self.assertRaises(IndexError):
+                qs[4]  # only 3 instances
+                
+            self.assertEqual(len(mocked.mock_calls), 4)
 
     def test_facets(self):
         qs = TestModel.es.queryset.facet(['last_name'])
-        expected = [{u'doc_count': 3, u'key': u'smith'},
-                    {u'doc_count': 1, u'key': u'bar'}]
+        expected = [{u'doc_count': 3, u'key': u'Smith'},
+                    {u'doc_count': 1, u'key': u'Bar'}]
         self.assertEqual(qs.facets['doc_count'], 4)
         self.assertEqual(qs.facets['last_name']['buckets'], expected)
 
     def test_non_global_facets(self):
         qs = TestModel.es.search("Foo").facet(['last_name'], use_globals=False)
-        expected = [{u'doc_count': 1, u'key': u'bar'}]
+        expected = [{u'doc_count': 1, u'key': u'Bar'}]
         self.assertEqual(qs.facets['last_name']['buckets'], expected)
 
     def test_suggestions(self):
@@ -113,44 +112,42 @@ class EsQuerysetTestCase(TestCase):
             u'last_name': [
                 {u'length': 5,
                  u'offset': 0,
-                 u'options': [{u'freq': 3,
-                               u'score': 0.8,
-                               u'text': u'smith'}],
+                 u'options': [],
                  u'text': u'smath'}]}
         self.assertEqual(expected, qs.suggestions)
 
     def test_count(self):
         self.assertEqual(TestModel.es.count(), 4)
-        self.assertEqual(TestModel.es.search("John").count(), 1)
         self.assertEqual(TestModel.es.search("").filter(last_name=u"Smith").count(), 3)
+        self.assertEqual(TestModel.es.search("John").count(), 1)
 
     def test_count_after_reeval(self):
         # regression test
         q = TestModel.es.all()
         self.assertEqual(q.count(), 4)
-        q = q.filter(username="woot")
+        q = q.filter(first_name="John")
         self.assertEqual(q.count(), 1)
 
     def test_ordering(self):
-        contents = TestModel.es.queryset.order_by('username').deserialize()
-        self.assertEqual(contents[0], self.t3)
-        self.assertEqual(contents[1], self.t4)
-        self.assertEqual(contents[2], self.t2)
-        self.assertEqual(contents[3], self.t1)
+        contents = TestModel.es.search("").order_by('first_name').deserialize()
+        self.assertEqual(contents[0], self.t4)
+        self.assertEqual(contents[1], self.t2)
+        self.assertEqual(contents[2], self.t1)
+        self.assertEqual(contents[3], self.t3)
 
     def test_default_ordering(self):
         qs = TestModel.objects.all()
         qes = TestModel.es.all().deserialize()
         self.assertEqual(list(qs), list(qes))
 
-    @withattrs(TestModel.Elasticsearch, 'ordering', ['username',])
+    @withattrs(TestModel.Elasticsearch, 'ordering', ['first_name',])
     def test_model_ordering(self):
         qs = TestModel.es.queryset.all()
         contents = qs.deserialize()
-        self.assertEqual(contents[0], self.t3)
-        self.assertEqual(contents[1], self.t4)
-        self.assertEqual(contents[2], self.t2)
-        self.assertEqual(contents[3], self.t1)
+        self.assertEqual(contents[0], self.t4)
+        self.assertEqual(contents[1], self.t2)
+        self.assertEqual(contents[2], self.t1)
+        self.assertEqual(contents[3], self.t3)
 
     def test_get(self):
         data = self.t1.es.get()
@@ -169,8 +166,8 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 not in contents)
 
-    def test_multiple_filter(self):
-        contents = TestModel.es.filter(last_name=u"Smith", first_name=u"jack").deserialize()
+    def test_multiple_filters(self):
+        contents = TestModel.es.filter(last_name=u"Smith", first_name=u"Jack").deserialize()
         self.assertTrue(self.t1 not in contents)
         self.assertTrue(self.t2 in contents)
         self.assertTrue(self.t3 not in contents)
@@ -219,45 +216,35 @@ class EsQuerysetTestCase(TestCase):
 
     @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'date_joined_exp'])
     def test_sub_object_lookup(self):
-        TestModel.es._fields = None
-        TestModel.es._mapping = None
-        TestModel.es.flush()  # update the mapping
-        time.sleep(2)
-
         qs = TestModel.es.filter(date_joined_exp__iso=self.t1.date_joined).deserialize()
-        self.assertEqual(qs.count(), 1)
+        self.assertEqual(len(qs), 1)
         self.assertTrue(self.t1 in qs)
 
         qs = TestModel.es.filter(date_joined_exp__iso__isnull=False)
         self.assertEqual(qs.count(), 4)
 
     def test_nested_filter(self):
-        TestModel.es._mapping = None
+        qs = TestModel.es.filter(groups__value='agroup')
+        self.assertEqual(qs.count(), 1)
         qs = TestModel.es.filter(groups=self.group)
         self.assertEqual(qs.count(), 1)
 
-    @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'date_joined_exp'])
+    @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'date_joined'])
     def test_filter_date_range(self):
-        TestModel.es._fields = None
-        TestModel.es._mapping = None
-        TestModel.es.flush()  # update the mapping
-        time.sleep(2)
-
-        contents = TestModel.es.filter(date_joined_exp__iso__gte=self.t2.date_joined.isoformat()).deserialize()
-
+        contents = TestModel.es.filter(date_joined__gte=self.t2.date_joined).deserialize()
         self.assertTrue(self.t1 not in contents)
         self.assertTrue(self.t2 in contents)
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 in contents)
 
     def test_excluding(self):
-        contents = TestModel.es.exclude(username=u"woot").deserialize()
+        contents = TestModel.es.exclude(first_name=u"Jack").deserialize()
         self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t2 not in contents)
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 in contents)
 
-        qs = TestModel.es.all().exclude(username__not=u"woot")
+        qs = TestModel.es.all().exclude(first_name__not=u"Jack")
         contents = qs.deserialize()
         self.assertTrue(self.t1 not in contents)
         self.assertTrue(self.t2 in contents)
@@ -293,19 +280,14 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t4 in contents)
 
     def test_chain_filter_exclude(self):
-        contents = TestModel.es.filter(last_name=u"Smith").exclude(username=u"woot").deserialize()
-        self.assertTrue(self.t1 in contents)  # note: it works because username is "not analyzed"
+        contents = TestModel.es.filter(last_name=u"Smith").exclude(first_name=u"Jack").deserialize()
+        self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t2 not in contents)  # excluded
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 not in contents)  # not a Smith
 
     @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'username'])
-    @withattrs(TestModel.Elasticsearch, 'mappings', {})
     def test_contains(self):
-        TestModel.es._fields = None
-        TestModel.es._mapping = None
-        TestModel.es.flush()  # update the mapping, username is now analyzed
-        time.sleep(2)  # TODO: flushing is not immediate, find a better way
         contents = TestModel.es.filter(username__contains='woot').deserialize()
         self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t2 in contents)
@@ -327,8 +309,8 @@ class EsQuerysetTestCase(TestCase):
 
     def test_clone_query(self):
         q = TestModel.es.all()
-        q2 = q.filter(username=u"woot")
-        q3 = q.filter(username=u"foo")
+        q2 = q.filter(first_name="John")
+        q3 = q.filter(first_name="Jack")
 
         self.assertEqual(q.count(), 4)
         self.assertEqual(q2.count(), 1)
@@ -339,7 +321,8 @@ class EsQuerysetTestCase(TestCase):
         # naive way to test this,
         # would be cool to find a way to test that it's actually taken into account
         from django_elasticsearch import client as test_client
-        reload(test_client)
+        import importlib
+        importlib.reload(test_client)
         self.assertTrue(test_client.es_client.ping())
 
     def test_extra(self):

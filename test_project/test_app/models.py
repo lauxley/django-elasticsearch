@@ -25,10 +25,15 @@ class TestModel(User, EsIndexable):
     class Elasticsearch(EsIndexable.Elasticsearch):
         index = 'django-test'
         doc_type = 'test-doc-type'
+        fields = ['id', 'last_login', 'is_superuser',
+                  'username', 'first_name', 'last_name',
+                  'email', 'is_staff', 'is_active',
+                  'date_joined', 'date_joined_exp', 'groups']
         mappings = {
-            "username": {"index": "not_analyzed"},
-            "date_joined_exp": {"type": "object"}
+            "date_joined_exp": {"type": "object"},
+            "username": {"type": "text"}
         }
+        exclude = ('password', 'user_permissions')
         serializer_class = TestSerializer
 
     class Meta:
@@ -64,7 +69,7 @@ class Test2Serializer(EsJsonSerializer):
         return 45
 
 
-class Test2Model(EsIndexable):
+class TestAllFieldsModel(EsIndexable):
     # string
     char = models.CharField(max_length=256, null=True)
     text = models.TextField(null=True)
@@ -72,15 +77,14 @@ class Test2Model(EsIndexable):
     filef = models.FileField(null=True, upload_to='f/')
     # img = models.ImageField(null=True)  # would need pillow
     filepf = models.FilePathField(null=True)
-    ipaddr = models.IPAddressField(null=True)
     genipaddr = models.GenericIPAddressField(null=True)
     slug = models.SlugField(null=True)
     url = models.URLField(null=True)
 
     # numeric
     intf = models.IntegerField(null=True)
+    duration = models.DurationField()
     bigint = models.BigIntegerField(null=True)
-    intlist = models.CommaSeparatedIntegerField(max_length=256, null=True)
     floatf = models.FloatField(null=True)
     dec = models.DecimalField(max_digits=5, decimal_places=2, null=True)
     posint = models.PositiveIntegerField(null=True)
@@ -100,9 +104,9 @@ class Test2Model(EsIndexable):
     timef = models.TimeField(null=True)
 
     # related
-    fk = models.ForeignKey(Dummy, null=True, related_name="tofk")
-    oto = models.OneToOneField(Dummy, null=True, related_name="toto")
-    fkself = models.ForeignKey('self', null=True, related_name="toselffk")  # a bit of a special case
+    fk = models.ForeignKey(Dummy, null=True, related_name="tofk", on_delete=models.SET_NULL)
+    oto = models.OneToOneField(Dummy, null=True, related_name="toto", on_delete=models.SET_NULL)
+    fkself = models.ForeignKey('self', null=True, related_name="toselffk", on_delete=models.SET_NULL)  # a bit of a special case
     mtm = models.ManyToManyField(Dummy, related_name="tomtm")
 
     class Elasticsearch(EsIndexable.Elasticsearch):
