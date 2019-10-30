@@ -194,7 +194,7 @@ class ElasticsearchManager():
         if suggest_fields:
             q = q.suggest(fields=suggest_fields, limit=suggest_limit)
         
-        return q.query(query)
+        return q.search(query)
 
     # Convenience methods
     def all(self):

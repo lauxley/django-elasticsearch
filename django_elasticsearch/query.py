@@ -144,8 +144,9 @@ class EsQueryset(QuerySet):
                 field, operator = self.sanitize_lookup(field)
                 field_ = field.split('.')[0]
                 mapping = self.model.es.mapping['properties']
-                is_nested = field_ in mapping and mapping[field_]['type'] in ['nested']
-
+                is_nested = field_ in mapping and mapping[field_]['type'] == 'nested'
+                mode = 'match' if (field_ in mapping and mapping[field_]['type'] == 'text') else 'term'
+                
                 if is_nested and isinstance(value, Model):
                     field_name = field + ".id"
                     value = value.id
@@ -155,42 +156,52 @@ class EsQueryset(QuerySet):
                 if isinstance(value, datetime):
                     value = value.isoformat()
                 
-                if operator == 'exact':
-                    filtr = {'must': [{'term': {field_name: value}}]}
+                if operator in ['must', 'exact']:
+                    filtr = {'must': [{mode: {field_name: value}}]}
                 
-                elif operator == 'not':
-                    filtr = {'must_not': [{'term': {field_name: value}}]}
+                elif operator == 'must_not':
+                    filtr = {'must_not': [{mode: {field_name: value}}]}
                 
                 elif operator == 'should':
-                    filtr = {'should': [{'term': {field_name: value}}]}
+                    filtr = {'should': [{mode: {field_name: value}}]}
                 
                 elif operator == 'should_not':
-                    filtr = {'should': [{'term': {field_name: value}}]}
+                    filtr = {'should': [{mode: {field_name: value}}]}
                 
-                elif operator == 'contains':
-                    filtr = {'must': [{'match': {field_name: value}}]}
-
                 elif operator in ['gt', 'gte', 'lt', 'lte']:
-                    filtr = {'must': [{'range': {field_name: {
-                        operator: value}}}]}
-
+                    filtr = {mode: [{
+                        'range': {
+                            field_name: {
+                                operator: value}
+                        }}]}
+                
                 elif operator == 'range':
-                    filtr = {'must': [{'range': {field_name: {
-                        'gte': value[0],
-                        'lte': value[1]}}}]}
-
+                    filtr = {mode: [{
+                        'range': {
+                            field_name: {
+                                'gte': value[0],
+                                'lte': value[1]
+                            }}}]}
+                
                 elif operator == 'isnull':
                     if value:
-                        filtr = {'filter': {'missing': {'field': field_name}}}
+                        filtr = {'must_not': [{'exists': {'field': field_name}}]}
                     else:
-                        filtr = {'filter': {'exists': {'field': field_name}}}
-
+                        filtr = {'must': [{'exists': {'field': field_name}}]}
+                
+                elif operator == 'exists':
+                    if value:
+                        filtr = {'must': [{'exists': {'field': field_name}}]}
+                    else:
+                        filtr = {'must_not': [{'exists': {'field': field_name}}]}
+                
                 if is_nested:
                     filtr = {'must': [{'nested': {'path': field.split('.')[0],
                                                   'query': {'bool': filtr}}}]}
                 nested_update(search, filtr)
         
         body = {"query": {"bool": search}}
+        print(body)
         return body
 
     @property
@@ -281,7 +292,19 @@ class EsQueryset(QuerySet):
 
         return
 
-    def query(self, query):
+    def search(self, *args, **kwargs):
+        """
+        By default search upon all analyzed fields:
+        search('query')
+        Do the match on a specific field:
+        search(field1='query', field2='query2')
+        """
+        if not args and not kwargs:
+            raise ValueError("Invalid arguments for search() supply one query or query on a subset of fields: search('query') or search(field='query')")
+        if len(args):
+            query = args[0]
+        else:
+            query = kwargs
         clone = self._clone()
         clone._query = query
         return clone
@@ -311,10 +334,13 @@ class EsQueryset(QuerySet):
         return clone
 
     def sanitize_lookup(self, lookup):
-        valid_operators = ['exact', 'not', 'should', 'should_not', 'range',
-                           'gt', 'lt', 'gte', 'lte', 'contains', 'isnull']
+        valid_operators = ['exact', 'not', 'must', 'must_not',
+                           'should', 'should_not',
+                           'range', 'gt', 'lt', 'gte', 'lte',
+                           'contains', 'exists', 'isnull']
         words = lookup.split('__')
-        fields = [word for word in words if word not in valid_operators]
+        fields = [word for word in words
+                  if word not in valid_operators]
         # this is also django's default lookup type
         operator = 'exact'
         if words[-1] in valid_operators:

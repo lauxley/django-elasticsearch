@@ -8,7 +8,6 @@ def nested_update(d, u):
             d[k] = r
         elif isinstance(v, collections.Iterable):
             try:
-                print(d[k])
                 d[k].extend(u[k])
             except KeyError:
                 d[k] = u[k]
