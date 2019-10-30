@@ -1,4 +1,5 @@
 import copy
+import logging
 from datetime import datetime
 
 from django.conf import settings
@@ -8,6 +9,8 @@ from django.db.models.query import REPR_OUTPUT_SIZE
 
 from django_elasticsearch.client import es_client
 from django_elasticsearch.utils import nested_update
+
+logger = logging.getLogger(__name__)
 
 
 class EsQueryset(QuerySet):
@@ -156,7 +159,7 @@ class EsQueryset(QuerySet):
                 if isinstance(value, datetime):
                     value = value.isoformat()
                 
-                if operator in ['must', 'exact']:
+                if operator == 'must':
                     filtr = {'must': [{mode: {field_name: value}}]}
                 
                 elif operator == 'must_not':
@@ -169,14 +172,14 @@ class EsQueryset(QuerySet):
                     filtr = {'should': [{mode: {field_name: value}}]}
                 
                 elif operator in ['gt', 'gte', 'lt', 'lte']:
-                    filtr = {mode: [{
+                    filtr = {'must': [{
                         'range': {
                             field_name: {
                                 operator: value}
                         }}]}
                 
                 elif operator == 'range':
-                    filtr = {mode: [{
+                    filtr = {'must': [{
                         'range': {
                             field_name: {
                                 'gte': value[0],
@@ -195,18 +198,21 @@ class EsQueryset(QuerySet):
                     else:
                         filtr = {'must_not': [{'exists': {'field': field_name}}]}
                 
+                else:
+                    raise ValueError("Unrecognized lookup '{operator}'".format(operator=operator))
+                
                 if is_nested:
                     filtr = {'must': [{'nested': {'path': field.split('.')[0],
                                                   'query': {'bool': filtr}}}]}
                 nested_update(search, filtr)
-        
+
         body = {"query": {"bool": search}}
-        print(body)
+        logger.info(body)
         return body
 
     @property
     def is_evaluated(self):
-        return bool(self._result_cache)
+        return len(self._result_cache) > 0
 
     @property
     def response(self):
@@ -253,12 +259,11 @@ class EsQueryset(QuerySet):
             search_params['from'] = self._start
         if self._stop:
             search_params['size'] = self._stop - self._start
-
+        
         if self.extra_body:
             body.update(self.extra_body)
         search_params['body'] = body
         self._body = body
-
         if self.mode == self.MODE_MLT:
             # change include's defaults to False
             search_params['include'] = self.mlt_kwargs.pop('include', False)
@@ -299,14 +304,15 @@ class EsQueryset(QuerySet):
         Do the match on a specific field:
         search(field1='query', field2='query2')
         """
-        if not args and not kwargs:
-            raise ValueError("Invalid arguments for search() supply one query or query on a subset of fields: search('query') or search(field='query')")
-        if len(args):
-            query = args[0]
-        else:
-            query = kwargs
+        if (not args and not kwargs) or (args and len(args) > 1):
+            raise TypeError("Invalid arguments for search() supply one query or query on a subset of fields: search('query') or search(field='query')")
+
         clone = self._clone()
-        clone._query = query
+        if len(args):
+            clone._query = args[0]
+        if len(kwargs):
+            clone.filters.update(kwargs)
+        
         return clone
 
     def facet(self, fields, limit=None, use_globals=True):
@@ -334,15 +340,15 @@ class EsQueryset(QuerySet):
         return clone
 
     def sanitize_lookup(self, lookup):
-        valid_operators = ['exact', 'not', 'must', 'must_not',
+        valid_operators = ['must', 'must_not',
                            'should', 'should_not',
                            'range', 'gt', 'lt', 'gte', 'lte',
-                           'contains', 'exists', 'isnull']
+                           'exists', 'isnull']
         words = lookup.split('__')
         fields = [word for word in words
                   if word not in valid_operators]
         # this is also django's default lookup type
-        operator = 'exact'
+        operator = 'must'
         if words[-1] in valid_operators:
             operator = words[-1]
         return '.'.join(fields), operator
@@ -351,17 +357,21 @@ class EsQueryset(QuerySet):
         clone = self._clone()
 
         filters = {}
-        # TODO: not __contains, not __range
         for lookup, value in kwargs.items():
             field, operator = self.sanitize_lookup(lookup)
-
-            if operator == 'exact':
-                filters['{0}__not'.format(field)] = value
-            elif operator == 'not':
+            if operator == 'must':
+                filters['{0}__must_not'.format(field)] = value
+            elif operator == 'must_not':
                 filters[field] = value
+            elif operator == 'should':
+                filters['{0}__should_not'.format(field)] = value
+            elif operator == 'should_not':
+                filters['{0}__should'.format(field)] = value
             elif operator in ['gt', 'gte', 'lt', 'lte']:
                 inverse_map = {'gt': 'lte', 'gte': 'lt', 'lt': 'gte', 'lte': 'gt'}
                 filters['{0}__{1}'.format(field, inverse_map[operator])] = value
+            elif operator == 'exists':
+                filters[lookup] = not value
             elif operator == 'isnull':
                 filters[lookup] = not value
             else:
@@ -438,6 +448,9 @@ class EsQueryset(QuerySet):
             self.do_search()
         else:
             body = self.make_search_body() or None
+            
+            print(body)
+            
             r = es_client.count(
                 index=self.index,
                 body=body)

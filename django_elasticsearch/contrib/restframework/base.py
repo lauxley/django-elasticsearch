@@ -2,15 +2,15 @@ from django.http import Http404
 
 from rest_framework.response import Response
 from rest_framework.mixins import ListModelMixin
-from rest_framework.decorators import list_route
+from rest_framework.decorators import action
 
 
 class AutoCompletionMixin(ListModelMixin):
     """
     Add a route to the ViewSet to get a list of completion suggestion.
     """
-
-    @list_route()
+    
+    @action(detail=False)
     def autocomplete(self, request, **kwargs):
         try:
             qp = request.query_params

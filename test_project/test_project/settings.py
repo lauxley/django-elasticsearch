@@ -14,20 +14,16 @@ ELASTICSEARCH_SETTINGS = {
 
 
 class DisableMigrations(object):
-
     def __contains__(self, item):
         return True
 
     def __getitem__(self, item):
         return None
-
 MIGRATION_MODULES = DisableMigrations()
-
 
 ADMINS = (
     # ('Your Name', 'your_email@example.com'),
 )
-
 MANAGERS = ADMINS
 
 DATABASES = {

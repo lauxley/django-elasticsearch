@@ -9,6 +9,8 @@ from django.conf import settings
 from django.db.models import FieldDoesNotExist
 from django.utils.functional import cached_property
 
+from elasticsearch.exceptions import RequestError
+
 from django_elasticsearch.query import EsQueryset
 from django_elasticsearch.client import es_client
 
@@ -159,10 +161,11 @@ class ElasticsearchManager():
     def queryset(self):
         return EsQueryset(self.model)
 
-    def search(self, query,
+    def search(self, query=None,
                facets=None, facets_limit=None, global_facets=True,
                suggest_fields=None, suggest_limit=None,
-               fuzziness=None):
+               fuzziness=None,
+               **lookups):
         """
         Returns a EsQueryset instance that acts a bit like a django Queryset
         facets is dictionnary containing facets informations
@@ -178,10 +181,9 @@ class ElasticsearchManager():
         :arg suggest_limit
         :arg fuzziness
         """
-
         q = self.queryset
         q.fuzziness = fuzziness
-
+        
         if facets is None and self.model.Elasticsearch.facets_fields:
             facets = self.model.Elasticsearch.facets_fields
         if facets:
@@ -194,7 +196,7 @@ class ElasticsearchManager():
         if suggest_fields:
             q = q.suggest(fields=suggest_fields, limit=suggest_limit)
         
-        return q.search(query)
+        return q.search(query, **lookups)
 
     # Convenience methods
     def all(self):
@@ -319,17 +321,24 @@ class ElasticsearchManager():
     def mapping(self):
         return self.make_mapping()
     
-    def create_index(self):
+    def create_index(self, ignore_existing=False):
         body = {'mappings': self.mapping}
         if hasattr(settings, 'ELASTICSEARCH_SETTINGS'):
             body['settings'] = settings.ELASTICSEARCH_SETTINGS
-        es_client.indices.create(self.index, body=body)
-
+        try:
+            es_client.indices.create(self.index, body=body)
+        except RequestError as e:
+            if ignore_existing and e.error in ["index_already_exists_exception",
+                                               "resource_already_exists_exception"]:
+                pass
+            else:
+                raise e
+    
     def reindex_all(self, queryset=None):
         q = queryset or self.model.objects.all()
         for instance in q:
             instance.es.do_index()
-
+    
     def flush(self):
         es_client.indices.delete([self.index],
                                  ignore_unavailable=True)

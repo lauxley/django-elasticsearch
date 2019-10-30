@@ -77,10 +77,15 @@ class EsQuerysetTestCase(TestCase):
         self.assertEqual(len(contents), 2)
         self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t2 in contents)
-        
+        self.assertTrue(self.t3 not in contents)
+        self.assertTrue(self.t4 not in contents)
+    
     def test_slice(self):
         content = TestModel.es.deserialize(TestModel.es.all()[0])
         self.assertEqual(self.t1, content)
+
+        content = TestModel.es.deserialize(TestModel.es.all()[1])
+        self.assertEqual(self.t2, content)
     
     def test_repr(self):
         contents = str(TestModel.es.queryset.order_by('id').deserialize())
@@ -91,28 +96,32 @@ class EsQuerysetTestCase(TestCase):
         with patch('django_elasticsearch.client.es_client.search',
                    MagicMock(side_effect=es_client.search)) as mocked:
             qs = TestModel.es.search("")
-            self.assertEqual(len(mocked.mock_calls), 0)
+            self.assertEqual(mocked.call_count, 0)  # lazy
+
+            self.assertEqual(len(qs._result_cache), 0)
+            
             # eval
             list(qs)
-            self.assertEqual(len(mocked.mock_calls), 1)
-            # use cache also
+            self.assertEqual(mocked.call_count, 1)
+            
+            # use cache
             list(qs)
             list(qs)[0]
             self.t1 in qs
-            self.assertEqual(len(mocked.mock_calls), 1)
+            self.assertEqual(mocked.call_count, 1)
             
             # re-eval
             list(qs[0:5])
-            self.assertEqual(len(mocked.mock_calls), 2)
+            self.assertEqual(mocked.call_count, 2)
 
             # and also
             qs[0]
-            self.assertEqual(len(mocked.mock_calls), 3)
+            self.assertEqual(mocked.call_count, 3)
             
             with self.assertRaises(IndexError):
                 qs[4]  # only 3 instances
                 
-            self.assertEqual(len(mocked.mock_calls), 4)
+            self.assertEqual(mocked.call_count, 4)
 
     def test_facets(self):
         qs = TestModel.es.queryset.facet(['last_name'])
@@ -126,14 +135,14 @@ class EsQuerysetTestCase(TestCase):
         self.assertEqual(qs.facets['last_name']['buckets'], expected)
 
     def test_suggestions(self):
-        qs = TestModel.es.search('smath').suggest(['last_name',], limit=3)
-        expected = {
-            u'last_name': [
-                {u'length': 5,
-                 u'offset': 0,
-                 u'options': [],
-                 u'text': u'smath'}]}
-        self.assertEqual(expected, qs.suggestions)
+        qs = TestModel.es.search('wout').suggest(['username',], limit=3)
+        expected = {'username': [{'length': 4,
+                                  'offset': 0,
+                                  'options': [{'freq': 2,
+                                               'score': 0.75,
+                                               'text': 'woot'}],
+                                  'text': 'wout'}]}
+        self.assertEqual(qs.suggestions, expected)
 
     def test_count(self):
         self.assertEqual(TestModel.es.count(), 4)
@@ -272,15 +281,9 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t2 not in contents)
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 in contents)
-        
-        qs = TestModel.es.all().exclude(first_name__not=u"Jack")
-        contents = qs.deserialize()
-        self.assertTrue(self.t1 not in contents)
-        self.assertTrue(self.t2 in contents)
-        self.assertTrue(self.t3 not in contents)
-        self.assertTrue(self.t4 not in contents)
-        
+                
         with self.assertRaises(NotImplementedError):
+            # TODO
             TestModel.es.exclude(id__range=(0, 1))
     
     def test_excluding_lookups(self):
@@ -317,7 +320,7 @@ class EsQuerysetTestCase(TestCase):
     
     @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'username'])
     def test_contains(self):
-        contents = TestModel.es.filter(username__contains='woot').deserialize()
+        contents = TestModel.es.search(username='woot').deserialize()
         self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t2 in contents)
         self.assertTrue(self.t3 not in contents)
@@ -345,14 +348,14 @@ class EsQuerysetTestCase(TestCase):
         self.assertEqual(q2.count(), 1)
         self.assertEqual(q3.count(), 1)
     
-    @override_settings(ELASTICSEARCH_CONNECTION_KWARGS={'max_retries': 0})
-    def test_custom_client_connection_kwargs(self):
-        # naive way to test this,
-        # would be cool to find a way to test that it's actually taken into account
-        from django_elasticsearch import client as test_client
-        import importlib
-        importlib.reload(test_client)
-        self.assertTrue(test_client.es_client.ping())
+    # @override_settings(ELASTICSEARCH_CONNECTION_KWARGS={'max_retries': 0})
+    # def test_custom_client_connection_kwargs(self):
+    #     # naive way to test this,
+    #     # would be cool to find a way to test that it's actually taken into account
+    #     from django_elasticsearch import client as test_client
+    #     import importlib
+    #     importlib.reload(test_client)
+    #     self.assertTrue(test_client.es_client.ping())
     
     def test_extra(self):
         q = TestModel.es.search("Jack").extra({
@@ -386,16 +389,19 @@ class EsQuerysetTestCase(TestCase):
     def test_range_plus_must(self):
         q = TestModel.es.filter(date_joined__gt='now-10d').filter(first_name="John")
         self.assertEqual(q.count(), 1)
+
+        q = TestModel.es.filter(date_joined__gt='now-10d').filter(first_name="Joe")
+        self.assertEqual(q.count(), 0)
     
     def test_chain_search(self):
-        # es.search('test').search('lol')
-        raise NotImplementedError
+        q = TestModel.es.search(last_name='Smith').search('John')
+        self.assertEqual(q.count(), 1)
     
-    def test_scoring(self):
-        # es.search(Score('test', 0.5)) or es.search(field=Score('test', 0.5))
-        raise NotImplementedError
+    # def test_scoring(self):
+    #     # es.search(Score('test', 0.5)) or es.search(field=Score('test', 0.5))
+    #     raise NotImplementedError
     
-    def test_filter_scoring(self):
-        # es.filter(field='value', score=0.5)
-        raise NotImplementedError
-
+    # def test_filter_scoring(self):
+    #     # es.filter(field='value', score=0.5)
+    #     raise NotImplementedError
+    # 

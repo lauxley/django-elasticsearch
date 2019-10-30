@@ -182,6 +182,8 @@ class EsAutoIndexTestCase(TestCase):
     """
 
     def setUp(self):
+        es_client.indices.delete(index=TestModel.es.get_index())
+        
         from django.db.models.signals import post_save, post_delete
         try:
             from django.db.models.signals import post_migrate
@@ -197,7 +199,7 @@ class EsAutoIndexTestCase(TestCase):
         except ImportError: # django 1.4
             from django.db.models import get_app
             app = get_app('django_elasticsearch')
-
+        
         post_save.connect(es_save_callback)
         post_delete.connect(es_delete_callback)
         post_migrate.connect(es_syncdb_callback)
