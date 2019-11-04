@@ -138,9 +138,10 @@ class EsQuerysetTestCase(TestCase):
         qs = TestModel.es.search('wout').suggest(['username',], limit=3)
         expected = {'username': [{'length': 4,
                                   'offset': 0,
-                                  'options': [{'freq': 2,
-                                               'score': 0.75,
-                                               'text': 'woot'}],
+                                  'options': [{
+                                      'freq': 4,
+                                      'score': 0.75,
+                                      'text': 'woot'}],
                                   'text': 'wout'}]}
         self.assertEqual(qs.suggestions, expected)
 

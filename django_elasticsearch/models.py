@@ -35,9 +35,8 @@ class EsIndexable(Model):
         search_fields = None  # defaults to all text/keyword fields
         facets_limit = 10
         facets_fields = None
-        # http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/search-suggesters-term.html
+        # https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters.html#completion-suggester
         suggest_fields = None
-        # http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/search-suggesters-completion.html
         completion_fields = None
 
     def __init__(self, *args, **kwargs):

@@ -210,7 +210,7 @@ class ElasticsearchManager():
 
     def exclude(self, **kwargs):
         return self.queryset.exclude(**kwargs)
-
+    
     def complete(self, field_name, query):
         """
         Returns a list of close values for auto-completion

@@ -31,7 +31,8 @@ class EsQueryset(QuerySet):
         self.extra_body = None
         self.facets_fields = None
         self.suggest_fields = None
-
+        self.suggest_limit = None
+        
         # model.Elasticsearch.ordering -> model._meta.ordering -> _score
         if hasattr(self.model.Elasticsearch, 'ordering'):
             self.ordering = self.model.Elasticsearch.ordering
@@ -238,7 +239,7 @@ class EsQueryset(QuerySet):
                 aggs[field]['terms']['size'] = self.facets_limit
 
             body['aggs'] = aggs
-
+        
         if self.suggest_fields:
             suggest = {}
             for field_name in self.suggest_fields:
@@ -247,13 +248,13 @@ class EsQueryset(QuerySet):
                 if self.suggest_limit:
                     suggest[field_name]["term"]["size"] = self.suggest_limit
             body['suggest'] = suggest
-
+        
         if self.ordering:
             body['sort'] = [{f: "asc"} if f[0] != '-' else {f[1:]: "desc"}
                             for f in self.ordering] + ["_score"]
-
+        
         search_params = {
-            'index': self.index
+            'index': [self.index,]
         }
         if self._start:
             search_params['from'] = self._start
@@ -264,19 +265,30 @@ class EsQueryset(QuerySet):
             body.update(self.extra_body)
         search_params['body'] = body
         self._body = body
+        
         if self.mode == self.MODE_MLT:
             # change include's defaults to False
-            search_params['include'] = self.mlt_kwargs.pop('include', False)
-            # update search params names
-            search_params.update(self.mlt_kwargs)
-            for param in ['type', 'indices', 'types', 'scroll', 'size', 'from']:
-                if param in search_params:
-                    search_params['search_{0}'.format(param)] = search_params.pop(param)
-            r = es_client.mlt(**search_params)
+            # search_params['include'] = self.mlt_kwargs.pop('include', False)
+            # # update search params names
+            # search_params.update(self.mlt_kwargs)
+            
+            search_params['more_like_this'] = {
+                'fields': self.mlt_kwargs.get('fields', '_all'),
+                'like': [{
+                    # '_index': self.index,
+                    '_id': self.mlt_kwargs.get('id')
+                }],
+                'min_term_frequency': self.mlt_kwargs.get('min_term_frequency', 1),
+                'max_term_frequency': self.mlt_kwargs.get('max_term_frequency', 10),
+            }
+            # search_params.update(self.mlt_kwargs)
+            # for param in ['type', 'indices', 'types', 'scroll', 'size', 'from']:
+            #     if param in search_params:
+            #         search_params['search_{0}'.format(param)] = search_params.pop(param)
         else:
             if 'from' in search_params:
                 search_params['from_'] = search_params.pop('from')
-            r = es_client.search(**search_params)
+        r = es_client.search(**search_params)
 
         self._response = r
         if self.facets_fields:
@@ -292,9 +304,9 @@ class EsQueryset(QuerySet):
         else:
             self._result_cache = [e['_source'] for e in r['hits']['hits']]
         self._max_score = r['hits']['max_score']
-
-        self._total = r['hits']['total']
-
+        
+        self._total = r['hits']['total']['value']
+        
         return
 
     def search(self, *args, **kwargs):
@@ -410,17 +422,21 @@ class EsQueryset(QuerySet):
         return self
 
     def complete(self, field_name, query):
-        resp = es_client.suggest(index=self.index,
-                                 body={field_name: {
-                                     "text": query,
-                                     "completion": {
-                                         "field": field_name,
-                                         # stick to fuzziness settings
-                                         "fuzzy" : {}
-                                     }}})
-
-        return [r['text'] for r in resp[field_name][0]['options']]
-
+        resp = es_client.search(index=[self.index,],
+                                body={
+                                    'suggest': {
+                                        field_name: {
+                                            'prefix': query ,
+                                            'completion': {'field': field_name}
+                                        }
+                                    }
+                                })
+        try:
+            return [r['text'] for r in resp['suggest'][field_name][0]['options']]
+        except KeyError:
+            # no results??
+            return []
+    
     def update(self):
         raise NotImplementedError("Db operational methods have been "
                                   "disabled for Elasticsearch Querysets.")
@@ -447,10 +463,7 @@ class EsQueryset(QuerySet):
             # Note: there is no count on the mlt api, need to fetch the results
             self.do_search()
         else:
-            body = self.make_search_body() or None
-            
-            print(body)
-            
+            body = self.make_search_body() or None            
             r = es_client.count(
                 index=self.index,
                 body=body)

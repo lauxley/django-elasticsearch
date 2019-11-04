@@ -1,3 +1,4 @@
+
 import json
 import datetime
 
@@ -172,16 +173,17 @@ class EsModelToJsonMixin(object):
         return obj
 
     def serialize(self, instance):
-        self.format(instance)
-        
-        return json.dumps(self.format(instance))
+        formated = self.format(instance)
+        return json.dumps(formated)
 
 
 class EsJsonSerializer(EsModelToJsonMixin, EsJsonToModelMixin, EsSerializer):
     """
     Default elasticsearch serializer for a django model
     """
-    pass
+    def serialize_type_filefield(self, instance, field_name):
+        file_ = getattr(instance, field_name)
+        return file_.name
 
 
 class EsSimpleJsonSerializer(EsModelToJsonMixin, EsDbMixin, EsSerializer):

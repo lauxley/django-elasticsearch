@@ -34,13 +34,13 @@ class EsJsonSerializerTestCase(TestCase):
 
     def test_serialize(self):
         obj = self.instance.es.serialize()
-        self.assertTrue(isinstance(obj, basestring))
+        self.assertTrue(isinstance(obj, str))
 
     @withattrs(TestAllFieldsModel.Elasticsearch, 'serializer_class',
                'django_elasticsearch.serializers.EsJsonSerializer')
     def test_dynamic_serializer_import(self):
         obj = self.instance.es.serialize()
-        self.assertTrue(isinstance(obj, basestring))
+        self.assertTrue(isinstance(obj, str))
 
     def test_deserialize(self):
         instance = TestAllFieldsModel.es.deserialize({'char': 'test'})

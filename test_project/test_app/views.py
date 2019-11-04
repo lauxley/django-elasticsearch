@@ -3,9 +3,13 @@ from django.http import HttpResponse
 from django.db.models import Model
 from django.views.generic.detail import SingleObjectMixin
 
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.serializers import ModelSerializer
+
 from django_elasticsearch.views import ElasticsearchListView
 from django_elasticsearch.views import ElasticsearchDetailView
-
+from django_elasticsearch.contrib.restframework import AutoCompletionMixin
+from django_elasticsearch.contrib.restframework import IndexableModelMixin
 
 from test_app.models import TestModel
 
@@ -37,35 +41,17 @@ class TestListView(JsonViewMixin, ElasticsearchListView):
         return self.object_list
 
 
-### contrib.restframework test viewsets
-from rest_framework.viewsets import ModelViewSet
-from django_elasticsearch.contrib.restframework import AutoCompletionMixin
-from django_elasticsearch.contrib.restframework import IndexableModelMixin
-
-
-from rest_framework import VERSION
-
-if int(VERSION[0]) < 3:
-    class TestViewSet(AutoCompletionMixin, IndexableModelMixin, ModelViewSet):
+class TestSerializer(ModelSerializer):
+    class Meta:
         model = TestModel
-        filter_fields = ('username',)
-        ordering_fields = ('id',)
-        search_param = 'q'
-        paginate_by = 10
-        paginate_by_param = 'page_size'
-else:
-    from rest_framework.serializers import ModelSerializer
+        fields = '__all__'
 
-    class TestSerializer(ModelSerializer):
-        class Meta:
-            model = TestModel
 
-    class TestViewSet(AutoCompletionMixin, IndexableModelMixin, ModelViewSet):
-        model = TestModel
-        queryset = TestModel.objects.all()
-        serializer_class = TestSerializer
-        filter_fields = ('username',)
-        ordering_fields = ('id',)
-        search_param = 'q'
-        paginate_by = 10
-        paginate_by_param = 'page_size'
+class TestViewSet(AutoCompletionMixin, IndexableModelMixin, ModelViewSet):
+    model = TestModel
+    queryset = TestModel.objects.all()
+    serializer_class = TestSerializer
+    filter_fields = ('username',)
+    ordering_fields = ('id',)
+    search_param = 'q'
+    paginate_by = 10

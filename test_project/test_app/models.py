@@ -83,7 +83,7 @@ class TestAllFieldsModel(EsIndexable):
 
     # numeric
     intf = models.IntegerField(null=True)
-    duration = models.DurationField()
+    duration = models.DurationField(null=True)
     bigint = models.BigIntegerField(null=True)
     floatf = models.FloatField(null=True)
     dec = models.DecimalField(max_digits=5, decimal_places=2, null=True)

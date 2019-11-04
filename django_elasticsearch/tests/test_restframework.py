@@ -26,57 +26,53 @@ class EsRestFrameworkTestCase(TestCase):
     def setUp(self):
         TestModel.es.create_index()
 
-        self.model1 = TestModel.objects.create(username='1', first_name='test')
+        self.model1 = TestModel.objects.create(username='1', email='test1@test.com', first_name='test')
         self.model1.es.do_index()
-        self.model2 = TestModel.objects.create(username='2', last_name='test')
+        self.model2 = TestModel.objects.create(username='2', email='test2@test.com', last_name='test')
         self.model2.es.do_index()
         self.model3 = TestModel.objects.create(username='whatever')
         self.model3.es.do_index()
         TestModel.es.do_update()
-
+        
         self.fake_request = Fake()
-
-        if int(VERSION[0]) < 3:
-            self.fake_request.QUERY_PARAMS = {api_settings.SEARCH_PARAM: 'test'}
-        else:
-            self.fake_request.query_params = {api_settings.SEARCH_PARAM: 'test'}
-
+        self.fake_request.query_params = {api_settings.SEARCH_PARAM: 'test'}
+        
         self.fake_request.GET = {api_settings.SEARCH_PARAM: 'test'}
         self.fake_view = Fake()
         self.fake_view.action = 'list'
-
+    
     def tearDown(self):
         super(EsRestFrameworkTestCase, self).tearDown()
         es_client.indices.delete(index=TestModel.es.get_index())
-
+    
     def _test_filter_backend(self):
         queryset = TestModel.es.all()
         filter_backend = ElasticsearchFilterBackend()
         queryset = filter_backend.filter_queryset(self.fake_request, queryset, self.fake_view)
-
+        
         l = queryset.deserialize()
         self.assertTrue(self.model1 in l)
         self.assertTrue(self.model2 in l)
         self.assertFalse(self.model3 in l)
-
+    
     def test_filter_backend(self):
         self._test_filter_backend()
-
+    
     def test_filter_backend_on_normal_model(self):
         filter_backend = ElasticsearchFilterBackend()
         with self.assertRaises(ValueError):
             filter_backend.filter_queryset(self.fake_request, User.objects.all(), self.fake_view)
-
+    
     def test_filter_backend_ordering(self):
         queryset = TestModel.es.all()
         filter_backend = ElasticsearchFilterBackend()
-        self.fake_view.ordering = ('-username',)
+        self.fake_view.ordering = ('-email',)
         queryset = filter_backend.filter_queryset(self.fake_request, queryset, self.fake_view).deserialize()
 
         self.assertEqual(queryset[0].id, self.model2.id)
         self.assertEqual(queryset[1].id, self.model1.id)
         del self.fake_view.ordering
-
+    
     def test_filter_backend_no_list(self):
         queryset = TestModel.es.all()
         filter_backend = ElasticsearchFilterBackend()
@@ -104,15 +100,15 @@ class EsRestFrameworkTestCase(TestCase):
         self.assertEqual(r.data['results'][0]['id'], self.model2.id)
 
     def test_pagination(self):
+        # Note: used in other tests
         self._test_pagination()
-
+        
     @withattrs(TestModel.Elasticsearch, 'facets_fields', ['first_name',])
     def test_facets(self):
         queryset = TestModel.es.all()
         filter_backend = ElasticsearchFilterBackend()
         s = filter_backend.filter_queryset(self.fake_request, queryset, self.fake_view)
-        expected = [{u'doc_count': 1, u'key': u'test'}]
-        self.assertEqual(s.facets['doc_count'], 3)
+        expected = [{'key': '', 'doc_count': 1}, {'doc_count': 1, 'key': 'test'}]
         self.assertEqual(s.facets['first_name']['buckets'], expected)
 
     @withattrs(TestModel.Elasticsearch, 'facets_fields', ['first_name',])
@@ -128,8 +124,9 @@ class EsRestFrameworkTestCase(TestCase):
 
     @withattrs(TestModel.Elasticsearch, 'completion_fields', ['username'])
     def test_completion_viewset(self):
-        # need to re-index :(
+        # # need to re-index :(
         TestModel.es.flush()
+        TestModel.es.reindex_all()
         TestModel.es.do_update()
 
         r = self.client.get('/rf/tests/autocomplete/', {'f': 'username',
@@ -168,7 +165,8 @@ class EsRestFrameworkTestCase(TestCase):
     def test_fallback_gracefully(self):
         # Note: can't use override settings because of how restframework handle settings :(
         #from django_elasticsearch.tests.urls import TestViewSet
-        from rest_framework.filters import DjangoFilterBackend, OrderingFilter
+        from django_filters.rest_framework import DjangoFilterBackend
+        from rest_framework.filters import OrderingFilter
         from rest_framework.settings import api_settings
 
         api_settings.DEFAULT_FILTER_BACKENDS = (DjangoFilterBackend, OrderingFilter)
