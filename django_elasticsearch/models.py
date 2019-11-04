@@ -79,10 +79,7 @@ def es_delete_callback(sender, instance, **kwargs):
 
 
 def es_syncdb_callback(sender, app=None, created_models=[], **kwargs):
-    if int(get_version()[2]) > 6:
-        models = sender.get_models()
-    else:
-        models = created_models
+    models = created_models
     
     for model in models:
         if issubclass(model, EsIndexable):

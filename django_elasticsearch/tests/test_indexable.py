@@ -211,6 +211,7 @@ class EsAutoIndexTestCase(TestCase):
         self.instance.es.do_index()
 
     def test_auto_save(self):
+        TestModel.es.flush()
         self.instance.first_name = u'Test'
         self.instance.save()
         TestModel.es.do_update()
