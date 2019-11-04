@@ -24,7 +24,6 @@ class TestSerializer(EsJsonSerializer):
 class TestModel(User, EsIndexable):
     class Elasticsearch(EsIndexable.Elasticsearch):
         index = 'django-test'
-        doc_type = 'test-doc-type'
         fields = ['id', 'last_login', 'is_superuser',
                   'username', 'first_name', 'last_name',
                   'email', 'is_staff', 'is_active',
@@ -111,7 +110,6 @@ class TestAllFieldsModel(EsIndexable):
 
     class Elasticsearch(EsIndexable.Elasticsearch):
         index = 'django-test'
-        doc_type = 'test-doc-type'
         serializer_class = Test2Serializer
         # Note: we need to specify this field since the value returned
         # by the serializer does not correspond to it's default mapping

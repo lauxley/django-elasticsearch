@@ -4,16 +4,16 @@ django_elasticsearch is a wrapper around py-elasticsearch that automates the ind
 INSTALL
 =======
 * [Install and launch elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup.html) if it's not done already.  
-Through [docker](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html):
+You can do it easil with [docker](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html):  
 ```shell
 docker pull docker.elastic.co/elasticsearch/elasticsearch:7.0.1
 docker run -d -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:7.0.1
 ```
 
-* Install [py-elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/client/python-api/current/)
+* Install the corresponding version of [py-elasticsearch](https://elasticsearch-py.readthedocs.io/en/master/index.html#compatibility)
     ```shell
-    pip install elasticsearch
-    ```
+    pip install "elasticsearch>=7.0.0,<8.0.0"
+    ```  
 
 * Install django_elasticsearch
     ```shell
@@ -21,17 +21,6 @@ docker run -d -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" docker.e
     ```
     **Note**: no pypy package yet
 
-
-ELASTICSEARCH VERSION COMPATIBILITY
-===================================
-
-As stated in the python elasticsearch module documentation:
-
->There are two branches for development - master and 0.4. Master branch is used to track all the changes for Elasticsearch 1.0 and beyond whereas 0.4 tracks Elasticsearch 0.90.
->
->Releases with major version 1 (1.X.Y) are to be used with Elasticsearch 1.* and later, 0.4 releases are meant to work with Elasticsearch 0.90.*.
-
-django_elasticsearch has only been tested with Elasticsearch 1.3.9 and it's corresponding python interface version 1.2.0, but since [the API hasn't change](https://elasticsearch-py.readthedocs.org/en/master/Changelog.html) i'm quite positive that newer and older versions should work fine too, as long as you use the right python module for your Elasticsearch version. [See the official docs on the matter](https://elasticsearch-py.readthedocs.org/en/master/#compatibility).
 
 USAGE
 =====
@@ -58,12 +47,12 @@ Then you can do:
 >>> MyModel.es.get(id=1)
 {'id': 1, 'foo': 'A value'}
 ```
-The elasticsearch manager methods (all, search, mlt) returns an instance of a EsQueryset, it's like a django Queryset but it queries elasticsearch instead of your db.  
+The elasticsearch manager methods (all, search, mlt) returns an instance of an EsQueryset, it's like a django Queryset but it queries elasticsearch instead of your db.  
 Like a regular Queryset, an EsQueryset is lazy, and if evaluated, returns a list of documents. The ```.deserialize()``` method makes the queryset return instances of models instead of dicts.
 
-> django-elasticsearch **DOES NOT** index documents by itself unless told to, either set settings.ELASTICSEARCH_AUTO_INDEX to True to index your models when you save them, or call directly myinstance.es.do_index().
+> django-elasticsearch **DOES NOT** index documents by itself unless told to, either set settings.ELASTICSEARCH_AUTO_INDEX to True to index your model instances on save, or call directly myinstance.es.do_index().
 
-To specify the size of output of documents, it is necessary to make a slice of data, for example:
+To specify the size of output of documents, it is necessary to slice the queryset, for example:
 
 ```
 len(list(MyModel.es.search('value')))
@@ -111,10 +100,6 @@ Each EsIndexable model receive an Elasticsearch class that contains its options 
     Defaults to 'django'  
     The elasticsearch index in which this model(document type) will be indexed.
 
-* **doc_type**  
-    Defaults to 'model-{model_name}'  
-    The elasticsearch type in which this model will be indexed.
-
 * **fields**  
     Defaults to None  
     The fields to be indexed by elasticsearch, if left to None, all models fields will be indexed.
@@ -125,7 +110,7 @@ Each EsIndexable model receive an Elasticsearch class that contains its options 
     Example:  
     
     ```python
-
+    
     MyModel(EsIndexable, models.Model):
         title = models.CharField(max_length=64)
         
