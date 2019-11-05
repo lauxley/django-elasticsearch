@@ -38,7 +38,12 @@ class EsQueryset(QuerySet):
             self.ordering = self.model.Elasticsearch.ordering
         else:
             self.ordering = getattr(self.model._meta, 'ordering', None)
-        self.fuzziness = fuzziness
+        
+        if fuzziness is None:  # beware, could be 0
+            self.fuzziness = getattr(settings, 'ELASTICSEARCH_FUZZINESS', 0.5)
+        else:
+            self.fuzziness = fuzziness
+        
         self.ndx = None
         self._query = ''
         self._deserialize = False
@@ -120,23 +125,17 @@ class EsQueryset(QuerySet):
         return len(self._result_cache)
 
     def make_search_body(self):
-        body = {}
         search = {}
-
-        if self.fuzziness is None:  # beware, could be 0
-            fuzziness = getattr(settings, 'ELASTICSEARCH_FUZZINESS', 0.5)
-        else:
-            fuzziness = self.fuzziness
-        
         if self._query:
-            search = {'must': [{'multi_match': {
-                'query': self._query,
-                'fields': self.model.es.get_search_fields(),
-                'fuzziness': fuzziness
-            }}]}
-        else:
-            if not self.filters:
-                search = {"must": [{"match_all": {}}]}
+            search = {'must': [{
+                'multi_match' : {
+                    'query': self._query,
+                    'fields': self.model.es.get_search_fields(),
+                    'fuzziness': self.fuzziness if self.fuzziness is not None else 'AUTO'
+                }
+            }]}
+        elif not self.filters:
+            search = {'must': [{'match_all': {}}]}
         
         if self.filters:
             for field, value in self.filters.items():
@@ -144,12 +143,11 @@ class EsQueryset(QuerySet):
                     value = value  #.lower()
                 except AttributeError:
                     pass
-
+                
                 field, operator = self.sanitize_lookup(field)
                 field_ = field.split('.')[0]
                 mapping = self.model.es.mapping['properties']
                 is_nested = field_ in mapping and mapping[field_]['type'] == 'nested'
-                mode = 'match' if (field_ in mapping and mapping[field_]['type'] == 'text') else 'term'
                 
                 if is_nested and isinstance(value, Model):
                     field_name = field + ".id"
@@ -160,32 +158,15 @@ class EsQueryset(QuerySet):
                 if isinstance(value, datetime):
                     value = value.isoformat()
                 
-                if operator == 'must':
-                    filtr = {'must': [{mode: {field_name: value}}]}
-                
-                elif operator == 'must_not':
-                    filtr = {'must_not': [{mode: {field_name: value}}]}
-                
-                elif operator == 'should':
-                    filtr = {'should': [{mode: {field_name: value}}]}
-                
-                elif operator == 'should_not':
-                    filtr = {'should': [{mode: {field_name: value}}]}
+                if operator in ['must', 'must_not', 'should']:
+                    mode = 'match' if (field_ in mapping and mapping[field_]['type'] == 'text') else 'term'
+                    filtr = {operator: [{mode: {field_name: value}}]}
                 
                 elif operator in ['gt', 'gte', 'lt', 'lte']:
-                    filtr = {'must': [{
-                        'range': {
-                            field_name: {
-                                operator: value}
-                        }}]}
+                    filtr = {'must': [{'range': {field_name: {operator: value}}}]}
                 
                 elif operator == 'range':
-                    filtr = {'must': [{
-                        'range': {
-                            field_name: {
-                                'gte': value[0],
-                                'lte': value[1]
-                            }}}]}
+                    filtr = {'must': [{'range': {field_name: {'gte': value[0],'lte': value[1]}}}]}
                 
                 elif operator == 'isnull':
                     if value:
@@ -205,10 +186,11 @@ class EsQueryset(QuerySet):
                 if is_nested:
                     filtr = {'must': [{'nested': {'path': field.split('.')[0],
                                                   'query': {'bool': filtr}}}]}
+
                 nested_update(search, filtr)
 
-        body = {"query": {"bool": search}}
-        logger.info(body)
+        body = {"query": {'bool': search}}
+        logger.info('Search query {}.'.format(body))
         return body
 
     @property
@@ -352,19 +334,21 @@ class EsQueryset(QuerySet):
         return clone
 
     def sanitize_lookup(self, lookup):
-        valid_operators = ['must', 'must_not',
-                           'should', 'should_not',
+        valid_operators = ['must', 'must_not', 'should',
                            'range', 'gt', 'lt', 'gte', 'lte',
                            'exists', 'isnull']
         words = lookup.split('__')
         fields = [word for word in words
                   if word not in valid_operators]
-        # this is also django's default lookup type
         operator = 'must'
+        
         if words[-1] in valid_operators:
             operator = words[-1]
+        if operator == 'isnull':
+            logger.warning('isnull is not an Elasticsearch lookup and may be drop in the future to avoid confusion, please use exists instead.')
+        
         return '.'.join(fields), operator
-
+    
     def exclude(self, **kwargs):
         clone = self._clone()
 
@@ -376,9 +360,8 @@ class EsQueryset(QuerySet):
             elif operator == 'must_not':
                 filters[field] = value
             elif operator == 'should':
-                filters['{0}__should_not'.format(field)] = value
-            elif operator == 'should_not':
-                filters['{0}__should'.format(field)] = value
+                # Note: a bit unclear what exclude..should means
+                filters['{0}__must_not'.format(field)] = value
             elif operator in ['gt', 'gte', 'lt', 'lte']:
                 inverse_map = {'gt': 'lte', 'gte': 'lt', 'lt': 'gte', 'lte': 'gt'}
                 filters['{0}__{1}'.format(field, inverse_map[operator])] = value
@@ -386,9 +369,11 @@ class EsQueryset(QuerySet):
                 filters[lookup] = not value
             elif operator == 'isnull':
                 filters[lookup] = not value
+            elif operator == 'range':
+                filters[lookup] = (value[1], value[0])
             else:
                 raise NotImplementedError("{0} is not a valid *exclude* lookup type.".format(operator))
-
+        
         clone.filters.update(filters)
         return clone
 

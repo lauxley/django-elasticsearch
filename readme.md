@@ -3,24 +3,31 @@ django_elasticsearch is a wrapper around py-elasticsearch that automates the ind
 
 INSTALL
 =======
-* [Install and launch elasticsearch](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/setup.html) if it's not done already.  
-You can do it easil with [docker](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html):  
+* [Install and launch elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/current/install-elasticsearch.html) if it's not done already.  
+You can do it easily with [docker](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html):  
 ```shell
 docker pull docker.elastic.co/elasticsearch/elasticsearch:7.0.1
 docker run -d -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:7.0.1
 ```
 
-* Install the corresponding version of [py-elasticsearch](https://elasticsearch-py.readthedocs.io/en/master/index.html#compatibility)
+* Install the corresponding version of [py-elasticsearch](https://elasticsearch-py.readthedocs.io/en/master/index.html#compatibility)  
     ```shell
     pip install "elasticsearch>=7.0.0,<8.0.0"
     ```  
 
-* Install django_elasticsearch
+* Install django_elasticsearch  
     ```shell
     pip install git+https://github.com/liberation/django_elasticsearch.git
     ```
-    **Note**: no pypy package yet
-
+    **Note**: no pypy package yet  
+  
+* Add it to settings.INSTALLED_APPS  
+   ```python:settings.py
+   INSTALLED_APPS = [
+       ...
+       'django_elasticsearch',
+   ]
+   ```
 
 USAGE
 =====
@@ -52,7 +59,7 @@ Like a regular Queryset, an EsQueryset is lazy, and if evaluated, returns a list
 
 > django-elasticsearch **DOES NOT** index documents by itself unless told to, either set settings.ELASTICSEARCH_AUTO_INDEX to True to index your model instances on save, or call directly myinstance.es.do_index().
 
-To specify the size of output of documents, it is necessary to slice the queryset, for example:
+To specify the number documents returned, it is necessary to slice the queryset, for example:
 
 ```
 len(list(MyModel.es.search('value')))
@@ -81,16 +88,17 @@ Project scope configuration (django settings):
 
 * **ELASTICSEARCH_SETTINGS**  
     No defaults  
-    If set, will be passed when creating any index [as is](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/indices-create-index.html#create-index-settings).
+    If set, will be passed when creating any index [as is](https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-create-index.html#create-index-settings).
 
 * **ELASTICSEARCH_FUZZINESS**  
     Defaults to 0.5  
-    Will be applied to any es.search query, See the [fuzziness section](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/common-options.html#fuzziness) of the elasticsearch documentation.
+    Will be applied to any es.search query, See the [fuzziness section](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-fuzzy-query.html) of the elasticsearch documentation.
 
 * **ELASTICSEARCH_CONNECTION_KWARGS**  
     Defaults to {}  
     Additional kwargs to be passed to at the instantiation of the elasticsearch client. Useful to manage HTTPS connection for example ([Reference](http://elasticsearch-py.readthedocs.org/en/master/api.html#elasticsearch.Elasticsearch)).
-
+  
+  
 Model scope configuration:
 --------------------------
 
@@ -117,7 +125,7 @@ Each EsIndexable model receive an Elasticsearch class that contains its options 
         class Elasticsearch(EsIndexable.Elasticsearch):
             mappings = {'title': {'boost': 2.0}}
     ```
-    In this example we only override the 'boost' attribute of the 'title' field, but there are plenty of possible configurations, see [the docs](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/indices-put-mapping.html).
+    In this example we only override the 'boost' attribute of the 'title' field, but there are plenty of possible configurations, see [the docs](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html).
 
 * **serializer_class**  
     Defaults to EsJsonSerializer  
@@ -143,6 +151,7 @@ Each EsIndexable model receive an Elasticsearch class that contains its options 
     Defaults to None  
     The fields on which to activate auto-completion (needs a specific mapping).
 
+  
 API
 ===
 
@@ -159,14 +168,17 @@ The Elasticsearch manager is available from the 'es' attribute of EsIndexable Mo
             global_facets=True,
             suggest_fields=None,
             suggest_limit=None,
-            fuzziness=None)  
+            fuzziness=None,
+            **lookups)  
     Returns a configured EsQueryset with the given options, or the defaults set in ```EsIndexable.Elasticsearch```.  
-  
+    When using the `query` argument (`MyModel.es.search('test')`), a [multi-match](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-multi-match-query.html) query on all searchable fields.  
+    You can also search on a specific indexed field (`MyModel.es.search(my_field='test')`).  
+
 * **es.all**()  
     Proxy to an empty query ```.search("")```.
   
 * **es.mlt** *needs_instance*  
-    Returns an EsQueryset of documents that are 'like' the given instance's document. See the [more like this api](http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/search-more-like-this.html).
+    Returns an EsQueryset of documents that are 'like' the given instance's document. See the [more like this api](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-mlt-query.html).
 
 **Other Manager methods**  
 * **es.count**()  
@@ -182,7 +194,7 @@ The Elasticsearch manager is available from the 'es' attribute of EsIndexable Mo
     Serialize and index the given instance.
   
 * **es.complete**(field_name, query)  
-    Returns a list of suggestions from elasticsearch for the given field and query.
+    Returns a list of suggestions from elasticsearch for the given field and query. It is optimized for speed, cf the [completion suggester](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters.html#completion-suggester).
     **Note**: field_name must be present in ```Elasticsearch.completion_fields``` because it needs a specific mapping. 
     Example:
     ```
@@ -207,12 +219,13 @@ The Elasticsearch manager is available from the 'es' attribute of EsIndexable Mo
   
 * **es.reindex_all**(queryset=None)  
     queryset defaults to ```self.model.objects.all()```   
-    Calls ```es.do_index()``` for every instance in queryset.
+    Calls ```es.do_index()``` for every instance in queryset.  
+    Obviously be very cautious about calling this one.  
   
 * **es.flush**()  
     Deletes the model's index and then reindex all instances of it.
-
-
+  
+  
 EsQueryset API:
 ---------------
 This class is as close as possible to a standard relational db Queryset, however the db operations (update and delete) are deactivated (i'm open for discussion on if and how to implement these). Note that just like regular Querysets, EsQuerysets are lazy, they can be ordered, filtered and faceted.  

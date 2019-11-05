@@ -139,7 +139,7 @@ class EsQuerysetTestCase(TestCase):
         expected = {'username': [{'length': 4,
                                   'offset': 0,
                                   'options': [{
-                                      'freq': 4,
+                                      'freq': 2,
                                       'score': 0.75,
                                       'text': 'woot'}],
                                   'text': 'wout'}]}
@@ -259,7 +259,7 @@ class EsQuerysetTestCase(TestCase):
         self.assertEqual(len(qs), 1)
         self.assertTrue(self.t1 in qs)
         
-        qs = TestModel.es.filter(date_joined_exp__iso__isnull=False)
+        qs = TestModel.es.filter(date_joined_exp__iso__exists=True)
         self.assertEqual(qs.count(), 4)
     
     def test_nested_filter(self):
@@ -282,10 +282,6 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t2 not in contents)
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 in contents)
-                
-        with self.assertRaises(NotImplementedError):
-            # TODO
-            TestModel.es.exclude(id__range=(0, 1))
     
     def test_excluding_lookups(self):
         contents = TestModel.es.exclude(id__gt=self.t2.id).deserialize()
@@ -311,6 +307,16 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t2 not in contents)
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 in contents)
+
+        contents = TestModel.es.exclude(date_created__range=('now-1d', 'now+1d'))
+        self.assertEqual(len(contents), 0)
+    
+    def test_chain_filters(self):
+        contents1 = TestModel.es.filter(last_name=u"Smith").filter(first_name=u"Jack").deserialize()
+        contents2 = TestModel.es.filter(last_name=u"Smith", first_name=u"Jack").deserialize()
+        self.assertEqual(len(contents1), 1)
+        self.assertEqual(len(contents2), 1)
+        self.assertEqual(contents1[0], contents2[0])
     
     def test_chain_filter_exclude(self):
         contents = TestModel.es.filter(last_name=u"Smith").exclude(first_name=u"Jack").deserialize()
@@ -318,6 +324,11 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t2 not in contents)  # excluded
         self.assertTrue(self.t3 in contents)
         self.assertTrue(self.t4 not in contents)  # not a Smith
+    
+    def test_chain_search(self):
+        contents = TestModel.es.search(last_name='Smith').search('John')
+        self.assertEqual(contents.count(), 1)
+        self.assertTrue(self.t1 in contents, 1)
     
     @withattrs(TestModel.Elasticsearch, 'fields', ['id', 'username'])
     def test_contains(self):
@@ -328,7 +339,7 @@ class EsQuerysetTestCase(TestCase):
         self.assertTrue(self.t4 not in contents)
     
     def test_should_lookup(self):
-        contents = TestModel.es.all().filter(last_name__should=u"Smith").deserialize()
+        contents = TestModel.es.filter(last_name__should=u"Smith").deserialize()
         self.assertTrue(self.t1 in contents)
         self.assertTrue(self.t4 not in contents)
     
@@ -393,11 +404,7 @@ class EsQuerysetTestCase(TestCase):
 
         q = TestModel.es.filter(date_joined__gt='now-10d').filter(first_name="Joe")
         self.assertEqual(q.count(), 0)
-    
-    def test_chain_search(self):
-        q = TestModel.es.search(last_name='Smith').search('John')
-        self.assertEqual(q.count(), 1)
-    
+        
     # def test_scoring(self):
     #     # es.search(Score('test', 0.5)) or es.search(field=Score('test', 0.5))
     #     raise NotImplementedError
